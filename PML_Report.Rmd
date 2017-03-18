@@ -1,0 +1,221 @@
+---
+title: "Practical Machine Learning - Project Report"
+author: "Emil Traicu"
+date: "March 18, 2017"
+output:
+  html_document:
+    keep_md: yes
+---
+
+```{r setup, include=TRUE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Overview
+
+Using devices such as Jawbone Up, Nike FuelBand, and Fitbit it is now possible to collect a large amount of data about personal activity relatively inexpensively. These type of devices are part of the quantified self movement - a group of enthusiasts who take measurements about themselves regularly to improve their health, to find patterns in their behavior, or because they are tech geeks. One thing that people regularly do is quantify how much of a particular activity they do, but they rarely quantify how well they do it. In this project, your goal will be to use data from accelerometers on the belt, forearm, arm, and dumbell of 6 participants. They were asked to perform barbell lifts correctly and incorrectly in 5 different ways.
+
+The goal of this project is to build a machine learning algorithm to predict activity quality (classe) from activity monitors.
+
+
+## Getting and loading the data
+
+Load libraries:
+
+```{r Loading Libraries, results="hide"}
+library(caret)
+library(rpart)
+library(rpart.plot)
+library(rattle)
+library(randomForest)
+library(gbm)
+library(knitr)
+```
+Load the data:
+
+```{r Getting and loading the data}
+set.seed(12345)
+trainURL  <- "http://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv"
+testURL   <- "http://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv"
+#Read the data and replace empty values by NA
+trainDS   <- read.csv(url(trainURL), na.strings=c("NA","#DIV/0!",""))
+testDS    <- read.csv(url(testURL ), na.strings=c("NA","#DIV/0!",""))
+dim(trainDS)
+dim( testDS)
+```
+
+## Cleaning and preprocessing the data
+
+Visually inspect data
+Remove columns that are obviously not predictors:
+
+```{r Remove columns that are obviously not predictors}
+train_Sub <- trainDS[,8:length(trainDS)]
+trainDS   <- train_Sub
+dim(trainDS)
+rm(train_Sub)
+```
+
+Remove columns with missing value:
+
+```{r Remove columns with missing value}
+trainDS <- trainDS[,(colSums(is.na(trainDS)) == 0)]
+dim(trainDS)
+```
+
+Remove variables with most NA-s (use threshold of >60%)
+
+```{r Remove variables with most NA-s (use threshold of >60%)}
+train_Sub <- trainDS
+for (i in 1:length(trainDS)) {
+  if (sum(is.na(trainDS[ , i])) / nrow(trainDS) >= .60) {
+    for (j in 1:length(train_Sub)) {
+      if (length(grep(names(trainDS[i]), names(train_Sub)[j]))==1) {
+        train_Sub <- train_Sub[ , -j]
+      }
+    }
+  }
+}
+trainDS <- train_Sub 
+dim(trainDS)
+rm(train_Sub)
+```
+Remove the variables with values near zero
+
+```{r RemovE the variables with values near zero}
+nzv       <- nearZeroVar(trainDS,saveMetrics=TRUE)
+ztrainDS  <- trainDS[,nzv$nzv==FALSE]
+dim(ztrainDS)
+```
+Preprocess the data:
+
+```{r Preprocess the data}
+#numericIdx       <- which(lapply(ztrainDS, class) %in% "numeric")
+#preprocessModel  <- preProcess(ztrainDS[,numericIdx],method=c('knnImpute', 'center', 'scale'))
+#pztrainDS        <- predict(preprocessModel, ztrainDS[,numericIdx])
+#pztrainDS$classe <- ztrainDS$classe
+#numericIdx       <- which(lapply(testDS, class) %in% "numeric")
+#preprocessModel  <- preProcess(testDS[,numericIdx],method=c('knnImpute', 'center', 'scale'))
+#ptestDS          <- predict(preprocessModel,testDS[,numericIdx])
+```
+## Preparing the data sets
+
+```{r Creating the validation data set}
+set.seed(12345)
+trainIdx  <- createDataPartition(ztrainDS$classe, p=3/4, list=FALSE)
+sztrainDS <- ztrainDS[trainIdx, ]
+szvalidDS <- ztrainDS[-trainIdx, ]
+dim(sztrainDS)  
+dim(szvalidDS)
+```
+Remove the 'classe' column
+
+```{r Remove the classe column}
+colNames1 <- colnames(trainDS)
+colNames2 <- colnames(trainDS[,-53])
+```
+
+Eliminate all the filtered out variables, from train dataset, from test and validation data set
+
+```{r Eliminate all the filtered out variables, from train dataset, from test and validation data set}
+sztestDS   <- testDS[names(testDS) %in% colNames1]         
+cszvalidDS <- szvalidDS[colNames2] 
+#dim(sztrainDS)
+#dim(sztestDS)
+#dim(szvalidDS)
+#dim(cszvalidDS)
+```
+
+Coerce the data into the same type
+
+```{r Coerce the data into the same type}
+csztestDS <- sztestDS
+for (i in 1:length(csztestDS) ) {
+        for(j in 1:length(sztrainDS)) {
+        if( length( grep(names(sztrainDS[i]), names(csztestDS)[j]) ) ==1)  {
+            class(csztestDS[j]) <- class(sztrainDS[i])
+        }      
+    }      
+}
+#And to make sure Coertion really worked:
+csztestDS <- rbind(sztrainDS[2, -53] , csztestDS) #note row 2 does not mean anything, this will be removed right.. now:
+csztestDS <- csztestDS[-1,]
+```
+
+## Model building
+
+Three algorithms will be used for buiding 3 models and then look to see which one produces the best out-of-sample accuracty. The three algorithms are:
+
+1. Decision trees with CART (rpart)
+2. Random forest decision trees (rf)
+3. Gradient Boosting (gbm)
+
+### Cross validation
+
+Cross validation is done for each model with K = 5.
+
+```{r CV}
+fitControl <- trainControl(method='cv', number = 5)
+```
+
+```{r D3}
+modFitD3 <- train(
+  classe ~ ., 
+  data=sztrainDS,
+  trControl=fitControl,
+  method='rpart'
+)
+predictD3 <- predict(modFitD3, cszvalidDS)
+cfmxD3    <- confusionMatrix(predictD3, szvalidDS$classe)
+cfmxD3
+plot(cfmxD3$table, col = cfmxD3$byClass, main = paste("Decision Tree Confusion Matrix: Accuracy =", round(cfmxD3$overall['Accuracy'], 4)))
+#fancyRpartPlot(modFitD3)
+```
+
+### Random Forest
+```{r RF}
+modFitRF <- train(
+  classe ~ ., 
+  data=sztrainDS,
+  trControl=fitControl,
+  method='rf',
+  ntree=250
+)
+predictRF <- predict(modFitRF, cszvalidDS, type = "raw")
+cfmxRF    <- confusionMatrix(predictRF, szvalidDS$classe)
+cfmxRF
+#plot(modFitRF)
+plot(cfmxRF$table, col = cfmxRF$byClass, main = paste("Random Forest Confusion Matrix: Accuracy =", round(cfmxRF$overall['Accuracy'], 4)))
+```
+
+### GBM
+```{r GBM}
+modFitGBM1 <- train(
+  classe ~ ., 
+  data=sztrainDS,
+  trControl=fitControl,
+  method='gbm',
+  verbose = FALSE
+)
+PredictGBM <- predict(modFitGBM1, newdata=cszvalidDS)
+cfmxGBM    <- confusionMatrix(PredictGBM, szvalidDS$classe)
+cfmxGBM
+plot(modFitGBM1)
+plot(cfmxGBM$table, col = cfmxGBM$byClass, main = paste("Gradient Boosted Confusion Matrix: Accuracy =", round(cfmxGBM$overall['Accuracy'], 4)))
+```
+## Predicting Results on the Test Data
+
+Random Forests provided an accuracy in the validation dataset of 99.20%, which was superior to the one provided by Decision Trees or GBM models. 
+The expected out-of-sample error is 100-99.20 = 0.80%.
+
+```{r Prediction}
+predictFin <- predict(modFitRF, sztestDS, type = "raw")
+predictFin
+```
+
+
+
+
+
+
+
